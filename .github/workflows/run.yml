@@ -1,0 +1,41 @@
+name: Kanal takibi
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kanal-takibi
+  cancel-in-progress: false
+
+jobs:
+  takip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+      - name: Python sürümünü ayarla
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Botu çalıştır
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
+      - name: Durumu kaydet ve gönder
+        if: always()
+        run: |
+          if [ -f state.json ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add state.json
+            if ! git diff --cached --quiet; then
+              git commit -m 'Takip durumunu güncelle'
+              git push
+            fi
+          fi
