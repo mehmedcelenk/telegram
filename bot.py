@@ -52,7 +52,10 @@ def istek(url, veri=None):
 
 
 def api(yontem, **veri):
-    sonuc = json.loads(istek('https://api.telegram.org/bot' + TOKEN + '/' + yontem, veri))
+    try:
+        sonuc = json.loads(istek('https://api.telegram.org/bot' + TOKEN + '/' + yontem, veri))
+    except RuntimeError as hata:
+        raise RuntimeError(f'{yontem}: {hata}') from hata
     if not sonuc.get('ok'):
         raise RuntimeError('Telegram isteği başarısız oldu.')
     return sonuc.get('result')
