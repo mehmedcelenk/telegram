@@ -6,5 +6,10 @@
   "update_offset": 167860031,
   "channels": {
     "oyunsektoruetkinlikleri": 4061
+  },
+  "sent_ids": {
+    "oyunsektoruetkinlikleri": [
+      4061
+    ]
   }
 }
