@@ -61,6 +61,33 @@ def api(yontem, **veri):
     return sonuc.get('result')
 
 
+def fotograf_gonder(adres, aciklama=None):
+    talep = Request(adres, headers={'User-Agent': 'Mozilla/5.0'})
+    with urlopen(talep, timeout=30) as yanit:
+        resim = yanit.read(10 * 1024 * 1024 + 1)
+    if len(resim) > 10 * 1024 * 1024:
+        raise RuntimeError('Fotoğraf izin verilen boyutu aşıyor.')
+    sinir = '----TelegramDuyuruSiniri' + os.urandom(16).hex()
+    govde = bytearray()
+    alanlar = {'chat_id': SOHBET}
+    if aciklama is not None:
+        alanlar['caption'] = aciklama
+    for ad, deger in alanlar.items():
+        govde.extend(f'--{sinir}\r\nContent-Disposition: form-data; name="{ad}"\r\n\r\n{deger}\r\n'.encode('utf-8'))
+    govde.extend(f'--{sinir}\r\nContent-Disposition: form-data; name="photo"; filename="duyuru.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+    govde.extend(resim)
+    govde.extend(f'\r\n--{sinir}--\r\n'.encode())
+    talep = Request('https://api.telegram.org/bot' + TOKEN + '/sendPhoto', data=bytes(govde),
+                    headers={'Content-Type': 'multipart/form-data; boundary=' + sinir})
+    try:
+        with urlopen(talep, timeout=30) as yanit:
+            sonuc = json.loads(yanit.read().decode('utf-8'))
+    except HTTPError as hata:
+        raise RuntimeError(f'Fotoğraf gönderilemedi (durum kodu: {hata.code}).') from hata
+    if not sonuc.get('ok'):
+        raise RuntimeError('Fotoğraf gönderilemedi.')
+
+
 def mesaj(metin):
     # Telegram metin sınırını aşmadan bütün içeriği ilet.
     while metin:
@@ -159,9 +186,9 @@ def kanal_tara(durum, kanal):
         metin = (duyuru['text'] + '\n\n' + durum['footer']).strip()
         if duyuru['photo']:
             if len(metin.encode('utf-16-le')) // 2 <= 1024:
-                api('sendPhoto', chat_id=SOHBET, photo=duyuru['photo'], caption=metin)
+                fotograf_gonder(duyuru['photo'], metin)
             else:
-                api('sendPhoto', chat_id=SOHBET, photo=duyuru['photo'])
+                fotograf_gonder(duyuru['photo'])
                 mesaj(metin)
         else:
             mesaj(metin)
