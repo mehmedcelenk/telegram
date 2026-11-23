@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -43,8 +43,12 @@ def yukle():
 def istek(url, veri=None):
     govde = urlencode(veri).encode('utf-8') if veri is not None else None
     talep = Request(url, data=govde, headers={'User-Agent': 'Mozilla/5.0'})
-    with urlopen(talep, timeout=30) as yanit:
-        return yanit.read().decode('utf-8')
+    try:
+        with urlopen(talep, timeout=30) as yanit:
+            return yanit.read().decode('utf-8')
+    except HTTPError as hata:
+        kaynak = 'Telegram bot hizmeti' if 'api.telegram.org' in url else 'Kanal önizlemesi'
+        raise RuntimeError(f'{kaynak} isteği başarısız oldu (durum kodu: {hata.code}).') from hata
 
 
 def api(yontem, **veri):
@@ -278,5 +282,5 @@ if __name__ == '__main__':
     try:
         main()
     except (OSError, ValueError, RuntimeError, URLError) as hata:
-        print('İşlem tamamlanamadı; bağlantıyı ve ayarları kontrol edin.', file=sys.stderr)
+        print(f'İşlem tamamlanamadı: {hata if isinstance(hata, RuntimeError) else type(hata).__name__}', file=sys.stderr)
         sys.exit(1)
