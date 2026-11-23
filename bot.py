@@ -179,19 +179,31 @@ class DuyuruCozumleyici(HTMLParser):
         self.derinlik = max(0, self.derinlik - 1)
 
 
-def duyuru_gonder(durum, kanal, duyuru):
-    metin = (duyuru['text'] + '\n\n' + durum['footer']).strip()
-    if duyuru['photo']:
-        if len(metin.encode('utf-16-le')) // 2 <= 1024:
-            fotograf_gonder(duyuru['photo'], metin)
-        else:
-            fotograf_gonder(duyuru['photo'])
-            mesaj(metin)
-    else:
-        mesaj(metin)
-    durum['sent_ids'].setdefault(kanal.lower(), []).append(duyuru['id'])
-    durum['channels'][kanal] = max(durum['channels'][kanal], duyuru['id'])
-    kaydet(durum)
+def duyurulari_gonder(durum, secilenler):
+    grup = []
+    metinler = []
+
+    def grubu_gonder():
+        if not grup:
+            return
+        mesaj('\n\n-----------\n\n'.join(metinler))
+        for kanal, duyuru in grup:
+            durum['sent_ids'].setdefault(kanal.lower(), []).append(duyuru['id'])
+            durum['channels'][kanal] = max(durum['channels'][kanal], duyuru['id'])
+        kaydet(durum)
+        grup.clear()
+        metinler.clear()
+
+    for kanal, duyuru in secilenler:
+        icerik = duyuru['text'] or 'Bu duyuruda metin bulunmuyor.'
+        metin = (icerik + '\n\n' + durum['footer']).strip()
+        aday = '\n\n-----------\n\n'.join(metinler + [metin])
+        if grup and len(aday.encode('utf-16-le')) // 2 > 4096:
+            grubu_gonder()
+        grup.append((kanal, duyuru))
+        metinler.append(metin)
+    grubu_gonder()
+    return len(secilenler)
 
 
 def sayfa_oku(kanal, once=None):
@@ -209,14 +221,12 @@ def kanal_tara(durum, kanal):
     yeniler = [d for d in duyurular if d['id'] > durum['channels'][kanal] and d['id'] not in gonderilen]
     if durum['channels'][kanal] == 0:
         yeniler = yeniler[-1:]
-    for duyuru in yeniler:
-        duyuru_gonder(durum, kanal, duyuru)
-    return len(yeniler)
+    return [(kanal, duyuru) for duyuru in yeniler]
 
 
 def bir_hafta(durum):
     baslangic = datetime.now(timezone.utc) - timedelta(days=7)
-    toplam = 0
+    secilenler = []
     for kanal in list(durum['channels']):
         once = None
         bulunan = {}
@@ -245,13 +255,15 @@ def bir_hafta(durum):
         gonderilen = set(durum['sent_ids'].get(kanal.lower(), []))
         for kimlik in sorted(bulunan):
             if kimlik not in gonderilen:
-                duyuru_gonder(durum, kanal, bulunan[kimlik])
-                toplam += 1
-    return toplam
+                secilenler.append((kanal, bulunan[kimlik]))
+    return duyurulari_gonder(durum, secilenler)
 
 
 def tara(durum):
-    return sum(kanal_tara(durum, kanal) for kanal in list(durum['channels']))
+    secilenler = []
+    for kanal in list(durum['channels']):
+        secilenler.extend(kanal_tara(durum, kanal))
+    return duyurulari_gonder(durum, secilenler)
 
 
 def panel(durum):
