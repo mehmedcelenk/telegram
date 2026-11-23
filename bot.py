@@ -34,6 +34,9 @@ def yukle():
         durum = VARSAYILAN.copy()
     if 'channels' not in durum:
         durum['channels'] = {durum['channel']: durum['last_id']}
+    durum.setdefault('sent_ids', {})
+    for kanal, son_id in durum['channels'].items():
+        durum['sent_ids'].setdefault(kanal.lower(), [son_id] if son_id else [])
     durum.pop('channel', None)
     durum.pop('last_id', None)
     kaydet(durum)
@@ -127,10 +130,12 @@ class DuyuruCozumleyici(HTMLParser):
         if self.aktif is None and 'tgme_widget_message' in siniflar:
             eslesme = re.fullmatch(r'([^/]+)/(\d+)', attrs.get('data-post', ''))
             if eslesme and eslesme.group(1).lower() == self.kanal:
-                self.aktif = {'id': int(eslesme.group(2)), 'text': '', 'photo': ''}
+                self.aktif = {'id': int(eslesme.group(2)), 'text': '', 'photo': '', 'date': ''}
                 self.mesaj_derinligi = self.derinlik
         if self.aktif is None:
             return
+        if etiket == 'time' and attrs.get('datetime') and not self.aktif['date']:
+            self.aktif['date'] = attrs['datetime']
         if 'tgme_widget_message_photo_wrap' in siniflar and not self.aktif['photo']:
             eslesme = re.search(r'background-image\s*:\s*url\(\s*[\'"]?(.*?)[\'"]?\s*\)', attrs.get('style', ''), re.I)
             if eslesme:
@@ -174,27 +179,75 @@ class DuyuruCozumleyici(HTMLParser):
         self.derinlik = max(0, self.derinlik - 1)
 
 
-def kanal_tara(durum, kanal):
-    sayfa = istek('https://t.me/s/' + kanal)
+def duyuru_gonder(durum, kanal, duyuru):
+    metin = (duyuru['text'] + '\n\n' + durum['footer']).strip()
+    if duyuru['photo']:
+        if len(metin.encode('utf-16-le')) // 2 <= 1024:
+            fotograf_gonder(duyuru['photo'], metin)
+        else:
+            fotograf_gonder(duyuru['photo'])
+            mesaj(metin)
+    else:
+        mesaj(metin)
+    durum['sent_ids'].setdefault(kanal.lower(), []).append(duyuru['id'])
+    durum['channels'][kanal] = max(durum['channels'][kanal], duyuru['id'])
+    kaydet(durum)
+
+
+def sayfa_oku(kanal, once=None):
+    adres = 'https://t.me/s/' + kanal
+    if once is not None:
+        adres += '?before=' + str(once)
     cozumleyici = DuyuruCozumleyici(kanal)
-    cozumleyici.feed(sayfa)
-    duyurular = sorted(cozumleyici.duyurular, key=lambda duyuru: duyuru['id'])
-    yeniler = [d for d in duyurular if d['id'] > durum['channels'][kanal]]
+    cozumleyici.feed(istek(adres))
+    return sorted(cozumleyici.duyurular, key=lambda duyuru: duyuru['id'])
+
+
+def kanal_tara(durum, kanal):
+    duyurular = sayfa_oku(kanal)
+    gonderilen = set(durum['sent_ids'].get(kanal.lower(), []))
+    yeniler = [d for d in duyurular if d['id'] > durum['channels'][kanal] and d['id'] not in gonderilen]
     if durum['channels'][kanal] == 0:
         yeniler = yeniler[-1:]
     for duyuru in yeniler:
-        metin = (duyuru['text'] + '\n\n' + durum['footer']).strip()
-        if duyuru['photo']:
-            if len(metin.encode('utf-16-le')) // 2 <= 1024:
-                fotograf_gonder(duyuru['photo'], metin)
-            else:
-                fotograf_gonder(duyuru['photo'])
-                mesaj(metin)
-        else:
-            mesaj(metin)
-        durum['channels'][kanal] = duyuru['id']
-        kaydet(durum)
+        duyuru_gonder(durum, kanal, duyuru)
     return len(yeniler)
+
+
+def bir_hafta(durum):
+    baslangic = datetime.now(timezone.utc) - timedelta(days=7)
+    toplam = 0
+    for kanal in list(durum['channels']):
+        once = None
+        bulunan = {}
+        while True:
+            duyurular = sayfa_oku(kanal, once)
+            if not duyurular:
+                break
+            en_kucuk = min(d['id'] for d in duyurular)
+            if once is not None and en_kucuk >= once:
+                raise RuntimeError('Kanalın önceki duyuruları alınamadı.')
+            eski_var = False
+            for duyuru in duyurular:
+                try:
+                    tarih = datetime.fromisoformat(duyuru['date'].replace('Z', '+00:00'))
+                    if tarih.tzinfo is None:
+                        continue
+                except ValueError:
+                    continue
+                if tarih < baslangic:
+                    eski_var = True
+                elif tarih <= datetime.now(timezone.utc):
+                    bulunan[duyuru['id']] = duyuru
+            if eski_var:
+                break
+            once = en_kucuk
+        gonderilen = set(durum['sent_ids'].get(kanal.lower(), []))
+        for kimlik in sorted(bulunan):
+            if kimlik not in gonderilen:
+                duyuru_gonder(durum, kanal, bulunan[kimlik])
+                toplam += 1
+    return toplam
 
 
 def tara(durum):
@@ -208,7 +261,8 @@ def panel(durum):
           f"Takip edilen kanallar: {kanallar}\nGönderim günü: {gun}\n"
           f"Gönderim saati: {durum['time']} (Türkiye saati)\nAltbilgi imzası: {durum['footer']}\n\n"
           'Komutlar\n/yardım — Bu paneli gösterir.\n/başlat — Bu paneli gösterir.\n'
-          '/şimdi — Yeni duyuruları hemen tarar.\n/kanal <kanal adı> — Kanal ekler.\n'
+          '/şimdi — Yeni duyuruları hemen tarar.\n/birhafta — Son yedi gündeki gönderilmemiş duyuruları gösterir.\n'
+          '/kanal <kanal adı> — Kanal ekler.\n'
           '/çıkar <kanal adı> — Kanalı takipten çıkarır.\n/kanallar — Kanalları gösterir.\n'
           '/gün <gün adı> — Gönderim gününü değiştirir.\n'
           '/saat <SS:DD> — Gönderim saatini değiştirir.\n/imza <metin> — Altbilgi imzasını değiştirir.')
@@ -225,6 +279,9 @@ def komut_isle(metin, durum):
     elif komut in ('/şimdi', '/simdi'):
         if not tara(durum):
             mesaj('Yeni duyuru bulunamadı, kanal güncel.')
+    elif komut == '/birhafta':
+        if not bir_hafta(durum):
+            mesaj('Son yedi günde gönderilmemiş duyuru bulunamadı.')
     elif komut == '/kanallar':
         mesaj('Takip edilen kanallar:\n' + ('\n'.join('@' + kanal for kanal in durum['channels']) or 'Henüz kanal eklenmedi.'))
     elif komut in ('/kanal', '/çıkar', '/cikar'):
